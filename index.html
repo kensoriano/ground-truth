@@ -53,6 +53,13 @@
   .viz svg { width: 100%; height: auto; display: block; }
   .viz .cap { font-size: .72rem; color: var(--muted); text-align: center; margin-top: .25rem; }
   @media (max-width: 420px) { .row { flex-direction: column-reverse; align-items: stretch; } .viz { flex-basis: auto; max-width: 200px; } }
+  .legend { background: var(--surface); color: var(--ink); border: 2px solid var(--line); border-radius: 6px;
+    padding: .5rem .7rem; font: .8rem/1.4 "Public Sans", system-ui, sans-serif; max-width: 190px; }
+  .legend strong { display: block; margin-bottom: .3rem; }
+  .legend .item { display: flex; align-items: center; gap: .45rem; margin: .2rem 0; }
+  .legend img { width: 18px; height: 18px; opacity: .6; border: 1px solid var(--line); }
+  .legend .hint { color: var(--muted); margin-top: .3rem; }
+  .legend .hint:empty { display: none; }
   .empty { padding: 2rem 1.5rem; background: var(--surface); color: var(--muted); }
   footer { margin-top: 2rem; font-size: .85rem; color: var(--muted); max-width: 70ch; }
 </style>
@@ -77,7 +84,7 @@
     </div>
   </div>
 
-  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), OpenStreetMap Nominatim. This is a screening tool, not an official flood determination or site investigation.</footer>
+  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), Esri World Geocoder, Photon, and OpenStreetMap Nominatim for addresses; USGS The National Map for basemaps. This is a screening tool, not an official flood determination or site investigation.</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -109,6 +116,44 @@ L.control.layers(
   { 'FEMA flood zones': flood },
   { collapsed: false }
 ).addTo(map);
+
+// Legend built from FEMA's own symbology so colors always match the overlay
+const legend = L.control({ position: 'bottomleft' });
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div', 'legend');
+  d.innerHTML = '<strong>FEMA flood zones</strong><div class="items">Loading...</div><div class="hint"></div>';
+  return d;
+};
+legend.addTo(map);
+const legendEl = legend.getContainer();
+const plainName = label => {
+  const l = label.toLowerCase();
+  if (l.includes('future')) return null;
+  if (l.includes('floodway')) return 'Floodway (highest risk)';
+  if (l.includes('1%')) return 'High risk (100-year floodplain)';
+  if (l.includes('0.2%')) return 'Moderate risk (500-year floodplain)';
+  return null;
+};
+fetch('https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/legend?f=json')
+  .then(r => r.json())
+  .then(d => {
+    const layer = (d.layers || []).find(l => l.layerId === 28);
+    const seen = new Set(), rows = [];
+    (layer ? layer.legend : []).forEach(item => {
+      const name = plainName(item.label || '');
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      rows.push(`<div class="item"><img alt="" src="data:${item.contentType};base64,${item.imageData}">${name}</div>`);
+    });
+    legendEl.querySelector('.items').innerHTML = rows.length ? rows.join('') : 'Shaded areas are mapped floodplains.';
+  })
+  .catch(() => { legendEl.querySelector('.items').textContent = 'Shaded areas are mapped floodplains.'; });
+const updateHint = () => {
+  legendEl.querySelector('.hint').textContent = map.getZoom() < 12 ? 'Zoom in to see flood zones.' : '';
+};
+map.on('zoomend', updateHint); updateHint();
+map.on('overlayadd', e => { if (e.layer === flood) legendEl.style.display = ''; });
+map.on('overlayremove', e => { if (e.layer === flood) legendEl.style.display = 'none'; });
 let marker = null;
 
 const $ = id => document.getElementById(id);
