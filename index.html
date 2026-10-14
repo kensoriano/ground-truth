@@ -91,7 +91,7 @@
     </div>
   </div>
 
-  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), DC Department of Energy and Environment, Esri World Geocoder, Photon, and OpenStreetMap Nominatim for addresses; USGS The National Map for basemaps. This is a screening tool, not an official flood determination or site investigation.</footer>
+  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), EPA Combined Sewer Overflow Inventory, DC Department of Energy and Environment, Esri World Geocoder, Photon, and OpenStreetMap Nominatim for addresses; USGS The National Map for basemaps. This is a screening tool, not an official flood determination or site investigation.</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -121,9 +121,12 @@ const flood = new ExportTiles('', { service: 'https://hazards.fema.gov/arcgis/re
   layerId: 28, opacity: 0.6, minZoom: 12, attribution: 'FEMA NFHL' }).addTo(map);
 const DC_STORM = 'https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Environment_Stormwater_Management/MapServer';
 const sewerArea = new ExportTiles('', { service: DC_STORM, layerId: 31, opacity: 0.45, attribution: 'DC DOEE' });
+const EPA_CSO = 'https://services.arcgis.com/cJ9YHowT8TU7DUyn/ArcGIS/rest/services/Combined_Sewer_Overflows/FeatureServer/0';
+const CSO_COLOR = '#833599';
+const outfallMarkers = L.layerGroup().addTo(map);
 L.control.layers(
   { 'Topo map': streets, 'Satellite': satellite },
-  { 'FEMA flood zones': flood, 'DC combined sewer area': sewerArea },
+  { 'FEMA flood zones': flood, 'Sewer overflow outfalls (EPA)': outfallMarkers, 'DC combined sewer area': sewerArea },
   { collapsed: false }
 ).addTo(map);
 
@@ -131,7 +134,8 @@ L.control.layers(
 const legend = L.control({ position: 'bottomleft' });
 legend.onAdd = () => {
   const d = L.DomUtil.create('div', 'legend');
-  d.innerHTML = '<strong>FEMA flood zones</strong><div class="items">Loading...</div><div class="hint"></div>';
+  d.innerHTML = '<div class="fl"><strong>FEMA flood zones</strong><div class="items">Loading...</div><div class="hint"></div></div>' +
+    `<div class="item cso"><span style="width:12px;height:12px;border-radius:50%;background:${CSO_COLOR};border:1px solid #000;margin:0 3px"></span>Sewer overflow outfall</div>`;
   return d;
 };
 legend.addTo(map);
@@ -162,8 +166,12 @@ const updateHint = () => {
   legendEl.querySelector('.hint').textContent = map.getZoom() < 12 ? 'Zoom in to see flood zones.' : '';
 };
 map.on('zoomend', updateHint); updateHint();
-map.on('overlayadd', e => { if (e.layer === flood) legendEl.style.display = ''; });
-map.on('overlayremove', e => { if (e.layer === flood) legendEl.style.display = 'none'; });
+const toggle = (layer, sel, on) => {
+  if (layer === flood) legendEl.querySelector('.fl').style.display = on ? '' : 'none';
+  if (layer === outfallMarkers) legendEl.querySelector('.cso').style.display = on ? '' : 'none';
+};
+map.on('overlayadd', e => toggle(e.layer, null, true));
+map.on('overlayremove', e => toggle(e.layer, null, false));
 let marker = null;
 
 const $ = id => document.getElementById(id);
@@ -245,6 +253,27 @@ async function getSewer(lat, lng, label) {
   return { combined: d.count > 0 };
 }
 
+const miles = (a, b, c, d) => {
+  const r = Math.PI / 180, x = (d - b) * r * Math.cos((a + c) / 2 * r), y = (c - a) * r;
+  return Math.sqrt(x * x + y * y) * 3959;
+};
+async function getOutfalls(lat, lng) {
+  const url = EPA_CSO + '/query?' + new URLSearchParams({
+    geometry: `${lng},${lat}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', distance: '3219', units: 'esriSRUnit_Meter',
+    outFields: 'facility_name,pf_state_waterbody_name', returnGeometry: 'true', outSR: '4326',
+    resultRecordCount: '300', f: 'json'
+  });
+  const d = await (await fetch(url)).json();
+  if (!d.features) throw new Error('Bad response');
+  return d.features.filter(f => f.geometry).map(f => ({
+    lat: f.geometry.y, lng: f.geometry.x,
+    facility: f.attributes.facility_name, water: f.attributes.pf_state_waterbody_name,
+    dist: miles(lat, lng, f.geometry.y, f.geometry.x)
+  })).sort((a, b) => a.dist - b.dist);
+}
+const titleCase = t => (t || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
 async function getZone(zip) {
   if (!zip) return null;
   const r = await fetch(`https://phzmapi.org/${zip.slice(0, 5)}.json`);
@@ -296,8 +325,21 @@ function explainSewer(s) {
   return { big: 'Separate storm sewer',
     text: 'Rain that runs off here goes through storm drains straight to the nearest stream, untreated, carrying whatever is on the street with it. Slowing it down on your lot keeps that pollution out of the water.' };
 }
+function explainOutfalls(o) {
+  if (o.length) {
+    const n = o[0], d = n.dist < 0.1 ? 'less than 0.1' : n.dist.toFixed(1);
+    const water = n.water ? ` into ${titleCase(n.water)}` : '';
+    const who = n.facility ? titleCase(n.facility) : 'your local sewer utility';
+    return { big: 'Combined sewer overflows nearby',
+      text: `There ${o.length === 1 ? 'is 1 combined sewer overflow outfall' : `are ${o.length} combined sewer overflow outfalls`} within 2 miles, the nearest about ${d} miles away${water}. That usually means older parts of this area have pipes that carry rain and sewage together and overflow into local waters in heavy storms. Ask ${who} whether your street is on combined pipes. Either way, holding rain on your lot with a rain barrel, rain garden, or disconnected downspout helps.`,
+      viz: sewerViz({ combined: true, cap: 'Combined sewers overflow nearby' }) };
+  }
+  return { big: 'No sewer overflows nearby',
+    text: 'EPA lists no combined sewer overflow outfalls within 2 miles, so rain here most likely runs through storm drains straight to the nearest stream, untreated. EPA\'s inventory covers about 80% of outfalls, so your local sewer utility can confirm.',
+    viz: sewerViz({ combined: false }) };
+}
 function sewerViz(s) {
-  const cap = s.combined ? 'Rain and sewage share one pipe' : 'Rain goes straight to the stream';
+  const cap = s.cap || (s.combined ? 'Rain and sewage share one pipe' : 'Rain goes straight to the stream');
   const rain = [12, 30, 48].map(x => `<line x1="${x}" y1="4" x2="${x - 3}" y2="13"/>`).join('');
   const pipes = s.combined
     ? `<path d="M30,50 L30,74 L132,74" fill="none" stroke="var(--loam)" stroke-width="7"/>
@@ -412,12 +454,23 @@ $('f').addEventListener('submit', async e => {
     marker = L.marker([loc.lat, loc.lng]).addTo(map);
     map.setView([loc.lat, loc.lng], 16);
     setStatus('Reading the ground at ' + loc.label.split(',').slice(0, 3).join(','));
-    const [flood, soil, zone, sewer] = await Promise.allSettled([getFlood(loc.lat, loc.lng), getSoil(loc.lat, loc.lng), getZone(loc.zip), getSewer(loc.lat, loc.lng, loc.label)]);
+    const [flood, soil, zone, sewer, outfalls] = await Promise.allSettled([getFlood(loc.lat, loc.lng), getSoil(loc.lat, loc.lng), getZone(loc.zip), getSewer(loc.lat, loc.lng, loc.label), getOutfalls(loc.lat, loc.lng)]);
+    outfallMarkers.clearLayers();
+    if (outfalls.status === 'fulfilled') outfalls.value.forEach(o => L.circleMarker([o.lat, o.lng], {
+      radius: 6, color: '#000', weight: 1, fillColor: CSO_COLOR, fillOpacity: .9
+    }).bindPopup(`<strong>Sewer overflow outfall</strong><br>${titleCase(o.facility)}${o.water ? '<br>Discharges to ' + titleCase(o.water) : ''}`).addTo(outfallMarkers));
+    const sewerLayer = (() => {
+      const T = 'Where your rainwater goes';
+      if (sewer.status === 'fulfilled' && sewer.value)
+        return renderLayer(T, 'var(--muted)', withViz(explainSewer(sewer.value), sewerViz(sewer.value)), 'DC Department of Energy and Environment');
+      if (outfalls.status === 'fulfilled')
+        return renderLayer(T, 'var(--muted)', explainOutfalls(outfalls.value), 'EPA National Combined Sewer Overflow Inventory');
+      return renderLayer(T, 'var(--muted)', failed('sewer overflow'), 'EPA National Combined Sewer Overflow Inventory');
+    })();
     $('core').innerHTML =
       renderLayer('Flood risk', 'var(--water)', flood.status === 'fulfilled' ? withViz(explainFlood(flood.value), floodViz(floodLevel(flood.value))) : failed('FEMA flood map'), 'FEMA National Flood Hazard Layer') +
       renderLayer('How your soil handles rain', 'var(--loam)', soil.status === 'fulfilled' ? withViz(explainSoil(soil.value), soilViz(soilParams(soil.value))) : failed('USDA soil'), 'USDA NRCS Soil Survey') +
-      (sewer.status === 'rejected' ? renderLayer('Where your rainwater goes', 'var(--muted)', failed('DC sewer map'), 'DC Department of Energy and Environment')
-        : sewer.value ? renderLayer('Where your rainwater goes', 'var(--muted)', withViz(explainSewer(sewer.value), sewerViz(sewer.value)), 'DC Department of Energy and Environment') : '') +
+      sewerLayer +
       renderLayer('Growing zone', 'var(--leaf)', zone.status === 'fulfilled' ? withViz(explainZone(zone.value), zoneViz(zone.value)) : failed('hardiness zone'), 'USDA Plant Hardiness Zone Map');
     setStatus(loc.label.split(',').slice(0, 3).join(','));
   } catch (err) {
