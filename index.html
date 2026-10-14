@@ -91,7 +91,7 @@
     </div>
   </div>
 
-  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), Esri World Geocoder, Photon, and OpenStreetMap Nominatim for addresses; USGS The National Map for basemaps. This is a screening tool, not an official flood determination or site investigation.</footer>
+  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), DC Department of Energy and Environment, Esri World Geocoder, Photon, and OpenStreetMap Nominatim for addresses; USGS The National Map for basemaps. This is a screening tool, not an official flood determination or site investigation.</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -105,22 +105,25 @@ const satellite = L.tileLayer(usgs + 'USGSImageryTopo/MapServer/tile/{z}/{y}/{x}
   maxZoom: 19, maxNativeZoom: 16, attribution: 'USGS The National Map: orthoimagery'
 });
 // FEMA flood zones as a translucent overlay
-// Same FEMA REST service as the flood query, rendered as 256px tiles
-const FemaTiles = L.TileLayer.extend({
+// ArcGIS REST "export" rendered as 256px tiles (used for FEMA and DC layers)
+const ExportTiles = L.TileLayer.extend({
   getTileUrl(c) {
     const size = this.getTileSize();
     const nw = map.options.crs.project(map.unproject(c.scaleBy(size), c.z));
     const se = map.options.crs.project(map.unproject(c.add([1, 1]).scaleBy(size), c.z));
-    return 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export?' + new URLSearchParams({
+    return this.options.service + '/export?' + new URLSearchParams({
       bbox: [nw.x, se.y, se.x, nw.y].join(','), bboxSR: '3857', imageSR: '3857',
-      size: '256,256', layers: 'show:28', transparent: 'true', format: 'png32', f: 'image'
+      size: '256,256', layers: 'show:' + this.options.layerId, transparent: 'true', format: 'png32', f: 'image'
     });
   }
 });
-const flood = new FemaTiles('', { opacity: 0.6, minZoom: 12, attribution: 'FEMA NFHL' }).addTo(map);
+const flood = new ExportTiles('', { service: 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer',
+  layerId: 28, opacity: 0.6, minZoom: 12, attribution: 'FEMA NFHL' }).addTo(map);
+const DC_STORM = 'https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Environment_Stormwater_Management/MapServer';
+const sewerArea = new ExportTiles('', { service: DC_STORM, layerId: 31, opacity: 0.45, attribution: 'DC DOEE' });
 L.control.layers(
   { 'Topo map': streets, 'Satellite': satellite },
-  { 'FEMA flood zones': flood },
+  { 'FEMA flood zones': flood, 'DC combined sewer area': sewerArea },
   { collapsed: false }
 ).addTo(map);
 
@@ -230,6 +233,18 @@ async function getSoil(lat, lng) {
   return rows.map(vals => Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
 }
 
+const inDC = label => /District of Columbia|Washington,? D\.?C\b/i.test(label || '');
+async function getSewer(lat, lng, label) {
+  if (!inDC(label)) return null;
+  const url = DC_STORM + '/31/query?' + new URLSearchParams({
+    geometry: `${lng},${lat}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', returnCountOnly: 'true', f: 'json'
+  });
+  const d = await (await fetch(url)).json();
+  if (typeof d.count !== 'number') throw new Error('Bad response');
+  return { combined: d.count > 0 };
+}
+
 async function getZone(zip) {
   if (!zip) return null;
   const r = await fetch(`https://phzmapi.org/${zip.slice(0, 5)}.json`);
@@ -273,6 +288,35 @@ function explainSoil(rows) {
   if (g.includes('/')) return { big: 'Wet unless drained', text: `The natural water table sits high here (group ${g}). If the site has been drained, it can absorb rain well; otherwise it behaves like a soggy clay. Soil: ${name}.` };
   if (map[g]) return { big: map[g][0], text: `${map[g][1]} Soil: ${name} (hydrologic group ${g}).` };
   return { big: 'Disturbed or urban soil', text: `Mapped as "${name}". That usually means fill, pavement, or reworked ground, so drainage varies block to block. A simple dig-and-fill percolation test will tell you more.` };
+}
+
+function explainSewer(s) {
+  if (s.combined) return { big: 'Combined sewer area',
+    text: 'Rain from your roof and street drains into the same pipes as sewage. In heavy storms those pipes overflow into the Anacostia, Potomac, or Rock Creek. Holding rain on your lot with a rain barrel, rain garden, or disconnected downspout directly cuts those overflows, and DC\'s RiverSmart Homes program helps pay for them.' };
+  return { big: 'Separate storm sewer',
+    text: 'Rain that runs off here goes through storm drains straight to the nearest stream, untreated, carrying whatever is on the street with it. Slowing it down on your lot keeps that pollution out of the water.' };
+}
+function sewerViz(s) {
+  const cap = s.combined ? 'Rain and sewage share one pipe' : 'Rain goes straight to the stream';
+  const rain = [12, 30, 48].map(x => `<line x1="${x}" y1="4" x2="${x - 3}" y2="13"/>`).join('');
+  const pipes = s.combined
+    ? `<path d="M30,50 L30,74 L132,74" fill="none" stroke="var(--loam)" stroke-width="7"/>
+       <path d="M30,50 L30,74 L132,74" fill="none" stroke="var(--water)" stroke-width="3" stroke-dasharray="5 4"/>
+       <path d="M126,74 Q140,74 142,64" fill="none" stroke="var(--loam)" stroke-width="3" marker-end="url(#ov)"/>`
+    : `<path d="M22,50 L22,68 L132,68" fill="none" stroke="var(--water)" stroke-width="5"/>
+       <path d="M38,50 L38,84 L100,84" fill="none" stroke="var(--loam)" stroke-width="5"/>
+       <rect x="100" y="78" width="16" height="12" fill="var(--muted)"/>`;
+  return `<svg viewBox="0 0 160 100" role="img" aria-label="${cap}">
+    <defs><marker id="ov" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--loam)"/></marker></defs>
+    <g stroke="var(--water)" stroke-width="2" stroke-linecap="round">${rain}</g>
+    <g fill="var(--surface)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round">
+      <rect x="14" y="30" width="32" height="20"/><polygon points="10,30 30,16 50,30"/></g>
+    <rect x="0" y="50" width="160" height="50" fill="var(--silt)"/>
+    <path d="M132,50 L140,62 L160,62 L160,50 Z" fill="var(--water)"/>
+    <rect x="132" y="62" width="28" height="38" fill="var(--water)"/>
+    ${pipes}
+  </svg><div class="cap">${cap}</div>`;
 }
 
 function explainZone(z) {
@@ -368,10 +412,12 @@ $('f').addEventListener('submit', async e => {
     marker = L.marker([loc.lat, loc.lng]).addTo(map);
     map.setView([loc.lat, loc.lng], 16);
     setStatus('Reading the ground at ' + loc.label.split(',').slice(0, 3).join(','));
-    const [flood, soil, zone] = await Promise.allSettled([getFlood(loc.lat, loc.lng), getSoil(loc.lat, loc.lng), getZone(loc.zip)]);
+    const [flood, soil, zone, sewer] = await Promise.allSettled([getFlood(loc.lat, loc.lng), getSoil(loc.lat, loc.lng), getZone(loc.zip), getSewer(loc.lat, loc.lng, loc.label)]);
     $('core').innerHTML =
       renderLayer('Flood risk', 'var(--water)', flood.status === 'fulfilled' ? withViz(explainFlood(flood.value), floodViz(floodLevel(flood.value))) : failed('FEMA flood map'), 'FEMA National Flood Hazard Layer') +
       renderLayer('How your soil handles rain', 'var(--loam)', soil.status === 'fulfilled' ? withViz(explainSoil(soil.value), soilViz(soilParams(soil.value))) : failed('USDA soil'), 'USDA NRCS Soil Survey') +
+      (sewer.status === 'rejected' ? renderLayer('Where your rainwater goes', 'var(--muted)', failed('DC sewer map'), 'DC Department of Energy and Environment')
+        : sewer.value ? renderLayer('Where your rainwater goes', 'var(--muted)', withViz(explainSewer(sewer.value), sewerViz(sewer.value)), 'DC Department of Energy and Environment') : '') +
       renderLayer('Growing zone', 'var(--leaf)', zone.status === 'fulfilled' ? withViz(explainZone(zone.value), zoneViz(zone.value)) : failed('hardiness zone'), 'USDA Plant Hardiness Zone Map');
     setStatus(loc.label.split(',').slice(0, 3).join(','));
   } catch (err) {
