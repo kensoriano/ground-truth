@@ -1,31 +1,29 @@
 # Ground Truth
 
-**What's under your address?** Type any US address to see its flood risk, how its soil handles rain, and its growing zone, explained in plain language with simple graphics.
+**What's under your address?** Look up any US address to see its flood zone, soil, and growing zone, explained in plain terms.
 
 **Live app:** https://kensoriano.github.io/ground-truth/
 
 ## What it shows
 
-- **Flood risk:** the FEMA flood zone at the address, what it means for the household, and a map overlay of nearby floodplains.
-- **How your soil handles rain:** the mapped soil and its hydrologic group, translated into practical guidance on drainage, rain gardens, and downspout disconnection. For urban soil complexes, it identifies the native soil mixed in with pavement and fill.
-- **Growing zone:** the USDA Plant Hardiness Zone and typical winter low temperatures.
+- **Flood risk:** the FEMA flood zone, what it means, and a map of nearby floodplains.
+- **How your soil handles rain:** the mapped soil type and how well it drains, with notes on rain gardens and downspouts. In urban areas, it picks out the native soil under the pavement and fill.
+- **Growing zone:** the USDA hardiness zone and typical winter lows.
 
 ## Data sources
 
-All data is public and pulled live when you search:
+Pulled live from public sources:
 
 - FEMA National Flood Hazard Layer
-- USDA NRCS Soil Data Access (SSURGO soil survey)
+- USDA NRCS Soil Data Access (SSURGO)
 - USDA Plant Hardiness Zone Map, via phzmapi.org
 - USGS The National Map (basemaps and imagery)
 - Esri World Geocoder, Photon, and OpenStreetMap Nominatim (address lookup)
 
 ## How it works
 
-The whole app is a single HTML file with no server or database. It uses Leaflet for the map and queries each public data service directly from the browser.
+One HTML file, no server. Leaflet draws the map, and the browser queries each data source directly.
 
 ## Limitations
 
-This is a screening tool, not an official flood determination or site investigation. Soil maps are drawn at a broad scale, so conditions on a specific lot can differ, especially in urban areas.
-
-Built by Kendall Soriano.
+For screening only, not an official flood determination or site investigation. Soil maps are broad, so conditions on a given lot can differ, especially in cities.
