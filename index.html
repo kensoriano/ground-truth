@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ground Truth: what's under your address</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox='0 0 32 32'><rect x='4' y='4' width='24' height='7' rx='1.5' fill='%234E7A45'/><rect x='4' y='13' width='24' height='7' rx='1.5' fill='%2374563E'/><rect x='4' y='22' width='24' height='7' rx='1.5' fill='%232C6E8A'/></svg>">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&display=swap" rel="stylesheet">
@@ -24,6 +25,11 @@
   body { margin: 0; background: var(--bg); color: var(--ink);
     font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5; }
   .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  .brand { display: flex; align-items: center; gap: .6rem; margin: 0 0 1.75rem; padding-bottom: 1rem;
+    border-bottom: 2px solid var(--line); text-decoration: none; color: var(--ink); }
+  .brand svg { width: 34px; height: 34px; flex: none; }
+  .brand span { font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em; }
+  .brand small { font-size: .9rem; font-weight: 400; color: var(--muted); margin-left: .25rem; }
   h1 { font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 800; line-height: 1.05; margin: 0 0 .5rem; letter-spacing: -.02em; }
   .lede { color: var(--muted); max-width: 52ch; margin: 0 0 1.5rem; }
   form { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
@@ -66,6 +72,7 @@
 </head>
 <body>
 <div class="wrap">
+  <header class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="4" width="24" height="7" rx="1.5" fill="#4E7A45"/><rect x="4" y="13" width="24" height="7" rx="1.5" fill="#74563E"/><rect x="4" y="22" width="24" height="7" rx="1.5" fill="#2C6E8A"/></svg><span>Ground Truth</span><small>environmental data for any US address</small></header>
   <h1>What's under your address?</h1>
   <p class="lede">Type a US address to see your flood risk, how your soil handles rain, and what you can grow, in plain language.</p>
 
