@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ground Truth: what's under your address</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #E9EFEC; --surface: #F7FAF8; --ink: #1E2B28; --muted: #5A6B66;
+    --water: #2C6E8A; --silt: #CBB896; --loam: #74563E; --leaf: #4E7A45; --alert: #A8432F;
+    --line: #C9D4CF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141C1A; --surface: #1C2623; --ink: #E3ECE8; --muted: #9AABA5;
+      --water: #5AA3C2; --silt: #B5A27E; --loam: #B08B6B; --leaf: #86B37A; --alert: #E07A62;
+      --line: #2E3B37; color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 800; line-height: 1.05; margin: 0 0 .5rem; letter-spacing: -.02em; }
+  .lede { color: var(--muted); max-width: 52ch; margin: 0 0 1.5rem; }
+  form { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  input { flex: 1 1 280px; font: inherit; padding: .75rem 1rem; border: 2px solid var(--line);
+    background: var(--surface); color: var(--ink); border-radius: 6px; }
+  input:focus, button:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+  button { font: inherit; font-weight: 600; padding: .75rem 1.25rem; border: 0; border-radius: 6px;
+    background: var(--ink); color: var(--bg); cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  #map { height: 460px; border-radius: 6px; border: 2px solid var(--line); background: var(--surface); }
+  .status { color: var(--muted); min-height: 1.5em; margin: 0 0 1rem; }
+  .status.err { color: var(--alert); }
+  /* The core sample: results stack like soil horizons */
+  .core { border-radius: 6px; overflow: hidden; border: 2px solid var(--line); }
+  .layer { padding: 1.1rem 1.25rem 1.1rem 1.5rem; background: var(--surface); position: relative; }
+  .layer + .layer { border-top: 2px dashed var(--line); }
+  .layer::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 8px; background: var(--band); }
+  .layer h2 { font-size: .95rem; font-weight: 600; color: var(--muted); margin: 0; }
+  .layer .big { font-size: 1.45rem; font-weight: 800; margin: .15rem 0 .35rem; line-height: 1.2; }
+  .layer p { margin: 0; max-width: 60ch; }
+  .layer .src { font-size: .8rem; color: var(--muted); margin-top: .5rem; }
+  .row { display: flex; gap: 1rem; align-items: center; }
+  .row .txt { flex: 1 1 auto; min-width: 0; }
+  .viz { flex: 0 0 150px; }
+  .viz svg { width: 100%; height: auto; display: block; }
+  .viz .cap { font-size: .72rem; color: var(--muted); text-align: center; margin-top: .25rem; }
+  @media (max-width: 420px) { .row { flex-direction: column-reverse; align-items: stretch; } .viz { flex-basis: auto; max-width: 200px; } }
+  .empty { padding: 2rem 1.5rem; background: var(--surface); color: var(--muted); }
+  footer { margin-top: 2rem; font-size: .85rem; color: var(--muted); max-width: 70ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>What's under your address?</h1>
+  <p class="lede">Type a US address to see your flood risk, how your soil handles rain, and what you can grow, in plain language.</p>
+
+  <form id="f">
+    <input id="addr" type="text" placeholder="e.g. 3000 Rhode Island Ave, Mount Rainier, MD" aria-label="Address" required>
+    <button id="go" type="submit">Check address</button>
+  </form>
+
+  <div class="grid">
+    <div id="map" role="region" aria-label="Map"></div>
+    <div>
+      <p class="status" id="status" aria-live="polite"></p>
+      <div class="core" id="core">
+        <div class="empty">Results will stack here, from the surface down: water, soil, climate.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Data: FEMA National Flood Hazard Layer, USDA NRCS Soil Data Access, USDA Plant Hardiness Zones (via phzmapi.org), OpenStreetMap Nominatim. This is a screening tool, not an official flood determination or site investigation.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const map = L.map('map').setView([38.93, -76.95], 11);
+const usgs = 'https://basemap.nationalmap.gov/arcgis/rest/services/';
+const streets = L.tileLayer(usgs + 'USGSTopo/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, maxNativeZoom: 16, attribution: 'USGS The National Map'
+}).addTo(map);
+const satellite = L.tileLayer(usgs + 'USGSImageryTopo/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, maxNativeZoom: 16, attribution: 'USGS The National Map: orthoimagery'
+});
+// FEMA flood zones as a translucent overlay
+// Same FEMA REST service as the flood query, rendered as 256px tiles
+const FemaTiles = L.TileLayer.extend({
+  getTileUrl(c) {
+    const size = this.getTileSize();
+    const nw = map.options.crs.project(map.unproject(c.scaleBy(size), c.z));
+    const se = map.options.crs.project(map.unproject(c.add([1, 1]).scaleBy(size), c.z));
+    return 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export?' + new URLSearchParams({
+      bbox: [nw.x, se.y, se.x, nw.y].join(','), bboxSR: '3857', imageSR: '3857',
+      size: '256,256', layers: 'show:28', transparent: 'true', format: 'png32', f: 'image'
+    });
+  }
+});
+const flood = new FemaTiles('', { opacity: 0.6, minZoom: 12, attribution: 'FEMA NFHL' }).addTo(map);
+L.control.layers(
+  { 'Topo map': streets, 'Satellite': satellite },
+  { 'FEMA flood zones': flood },
+  { collapsed: false }
+).addTo(map);
+let marker = null;
+
+const $ = id => document.getElementById(id);
+const setStatus = (msg, err = false) => { $('status').textContent = msg; $('status').className = 'status' + (err ? ' err' : ''); };
+
+class NoMatch extends Error {}
+
+// Try several free geocoders in order; a local file has no web origin, which some services refuse
+const geocoders = [
+  async q => { // Esri World Geocoder
+    const url = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?' + new URLSearchParams({
+      SingleLine: q, f: 'json', maxLocations: '1', countryCode: 'USA', outFields: 'Postal,Match_addr'
+    });
+    const d = await (await fetch(url)).json();
+    const c = d.candidates && d.candidates[0];
+    if (!c || c.score < 80) return null;
+    return { lat: c.location.y, lng: c.location.x, label: c.attributes.Match_addr || c.address, zip: c.attributes.Postal };
+  },
+  async q => { // Photon (OpenStreetMap)
+    const d = await (await fetch('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q))).json();
+    const f = d.features && d.features[0];
+    if (!f) return null;
+    const p = f.properties;
+    const label = [p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.name, p.city, p.state].filter(Boolean).join(', ');
+    return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], label, zip: p.postcode };
+  },
+  async q => { // Nominatim (OpenStreetMap)
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=1&countrycodes=us&q=' + encodeURIComponent(q));
+    const d = await r.json();
+    if (!d.length) return null;
+    return { lat: +d[0].lat, lng: +d[0].lon, label: d[0].display_name, zip: (d[0].address || {}).postcode };
+  }
+];
+
+async function geocode(q) {
+  let reached = false;
+  for (const g of geocoders) {
+    try {
+      const hit = await g(q);
+      reached = true;
+      if (hit) return hit;
+    } catch (e) { console.warn('Geocoder failed:', e); }
+  }
+  if (reached) throw new NoMatch();
+  throw new Error('No geocoder reachable');
+}
+
+async function getFlood(lat, lng) {
+  const url = 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query?' + new URLSearchParams({
+    geometry: `${lng},${lat}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', outFields: 'FLD_ZONE,ZONE_SUBTY,SFHA_TF',
+    returnGeometry: 'false', f: 'json'
+  });
+  const d = await (await fetch(url)).json();
+  return d.features && d.features.length ? d.features[0].attributes : null;
+}
+
+async function getSoil(lat, lng) {
+  const sql = `SELECT TOP 5 mu.muname, c.compname, c.hydgrp, c.drainagecl, c.comppct_r
+    FROM mapunit mu INNER JOIN component c ON c.mukey = mu.mukey
+    WHERE mu.mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('POINT(${lng} ${lat})'))
+    ORDER BY c.comppct_r DESC`;
+  const body = new URLSearchParams({ query: sql, format: 'JSON+COLUMNNAME' });
+  const d = await (await fetch('https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest', { method: 'POST', body })).json();
+  if (!d.Table || d.Table.length < 2) return null;
+  const [cols, ...rows] = d.Table;
+  return rows.map(vals => Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+}
+
+async function getZone(zip) {
+  if (!zip) return null;
+  const r = await fetch(`https://phzmapi.org/${zip.slice(0, 5)}.json`);
+  return r.ok ? r.json() : null;
+}
+
+function explainFlood(a) {
+  if (!a) return { big: 'Not mapped here', text: 'FEMA has no flood map for this exact point. That usually means it hasn\'t been studied, not that it\'s safe.' };
+  const z = (a.FLD_ZONE || '').trim(), sub = (a.ZONE_SUBTY || '').toUpperCase();
+  if (sub.includes('FLOODWAY')) return { big: `Zone ${z}: in the floodway`, text: 'This is the channel that carries floodwater. It has the highest risk, and building here is tightly restricted.', hot: true };
+  if (z.startsWith('V')) return { big: `Zone ${z}: coastal high risk`, text: 'Inside the 100-year floodplain with wave action. Flood insurance is usually required for federally backed mortgages.', hot: true };
+  if (z.startsWith('A')) return { big: `Zone ${z}: high flood risk`, text: 'Inside the 100-year floodplain: a 1% chance of flooding every year, or about 1 in 4 over a 30-year mortgage. Flood insurance is usually required for federally backed mortgages.', hot: true };
+  if (z === 'X' && sub.includes('0.2')) return { big: 'Zone X (shaded): moderate risk', text: 'Inside the 500-year floodplain, a 0.2% chance each year. Insurance isn\'t required but is cheap and worth a look.' };
+  if (z === 'X') return { big: 'Zone X: low mapped risk', text: 'Outside FEMA\'s mapped floodplains. Heavy rain can still flood basements and streets, and over 20% of flood insurance claims come from areas like this.' };
+  if (z === 'D') return { big: 'Zone D: risk undetermined', text: 'FEMA hasn\'t analyzed flood hazards here.' };
+  return { big: `Zone ${z}`, text: 'See FEMA\'s Flood Map Service Center for details on this zone.' };
+}
+
+function explainSoil(rows) {
+  if (!rows || !rows.length) return { big: 'No soil data', text: 'The USDA soil survey doesn\'t cover this point.' };
+  const s = rows[0];
+  const g = (s.hydgrp || '').toUpperCase();
+  const name = s.muname;
+  const drain = { 'A': 'drains fast', 'B': 'drains well', 'C': 'drains slowly', 'D': 'drains very slowly' };
+  const native = rows.find(r => r.hydgrp);
+  if (!g && native) {
+    const ng = native.hydgrp.toUpperCase();
+    const how = drain[ng] || 'is wet unless drained';
+    const tip = (ng === 'A' || ng === 'B')
+      ? 'Where that original soil is still there, like yards, tree boxes, and parks, a rain garden or downspout disconnection should work well.'
+      : 'Even where the original soil remains, expect water to linger after storms.';
+    return { big: `Mostly urban land, with ${native.compname} soil`,
+      text: `Much of this area is pavement, buildings, and fill, so drainage varies block to block. The original soil mixed in is ${native.compname}, which ${how} (hydrologic group ${ng}). ${tip}` };
+  }
+  const map = {
+    'A': ['Drains fast', 'Sandy or gravelly soil. Rain soaks in quickly, so rain gardens and permeable paving work well. It can also dry out fast in summer.'],
+    'B': ['Drains well', 'Loamy soil that absorbs rain at a moderate rate. A good candidate for rain gardens and downspout disconnection.'],
+    'C': ['Drains slowly', 'Rain soaks in slowly, so water tends to pond after storms. A rain garden here should be larger or have amended soil.'],
+    'D': ['Drains very slowly', 'Clay-heavy soil or a high water table. Expect puddles and runoff. Choose plants that tolerate wet feet, and test before relying on infiltration.']
+  };
+  if (g.includes('/')) return { big: 'Wet unless drained', text: `The natural water table sits high here (group ${g}). If the site has been drained, it can absorb rain well; otherwise it behaves like a soggy clay. Soil: ${name}.` };
+  if (map[g]) return { big: map[g][0], text: `${map[g][1]} Soil: ${name} (hydrologic group ${g}).` };
+  return { big: 'Disturbed or urban soil', text: `Mapped as "${name}". That usually means fill, pavement, or reworked ground, so drainage varies block to block. A simple dig-and-fill percolation test will tell you more.` };
+}
+
+function explainZone(z) {
+  if (!z) return { big: 'Zone unavailable', text: 'Couldn\'t find a hardiness zone for this ZIP code.' };
+  return { big: `Zone ${z.zone}`, text: `Winters typically bottom out around ${z.temperature_range}°F. Pick perennials, shrubs, and trees rated for zone ${z.zone} or colder.` };
+}
+
+// ---------- Graphics ----------
+function floodLevel(a) {
+  if (!a) return -1;
+  const z = (a.FLD_ZONE || '').trim(), sub = (a.ZONE_SUBTY || '').toUpperCase();
+  if (sub.includes('FLOODWAY')) return 3;
+  if (z.startsWith('A') || z.startsWith('V')) return 2;
+  if (z === 'X' && sub.includes('0.2')) return 1;
+  if (z === 'X') return 0;
+  return -1;
+}
+function floodViz(level) {
+  if (level < 0) return '';
+  const y = [74, 61, 47, 32][level];
+  const cap = ['Water stays in the channel', 'Water reaches the yard in rare floods', 'A 1%-a-year flood reaches the house', 'Floodwater flows through here'][level];
+  return `<svg viewBox="0 0 160 100" role="img" aria-label="${cap}">
+    <g fill="var(--surface)" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round">
+      <rect x="101" y="41" width="30" height="19"/><polygon points="97,41 116,27 135,41"/></g>
+    <rect x="0" y="${y}" width="160" height="${100 - y}" fill="var(--water)" opacity=".6"/>
+    <path d="M0,60 L28,60 L44,86 L66,86 L82,60 L160,60 L160,100 L0,100 Z" fill="var(--silt)"/>
+    <line x1="0" y1="${y}" x2="160" y2="${y}" stroke="var(--water)" stroke-width="2" stroke-dasharray="4 3"/>
+  </svg><div class="cap">${cap}</div>`;
+}
+function soilParams(rows) {
+  if (!rows || !rows.length) return null;
+  const g = (rows[0].hydgrp || '').toUpperCase();
+  if (!g) {
+    const n = rows.find(r => r.hydgrp);
+    return { group: n ? n.hydgrp.toUpperCase().charAt(0) : null, urban: true };
+  }
+  return { group: g.includes('/') ? 'D' : g.charAt(0), urban: false };
+}
+function soilViz(p) {
+  if (!p) return '';
+  const depth = { A: 62, B: 46, C: 26, D: 12 }[p.group] || 0;
+  const puddle = { C: 14, D: 24 }[p.group] || 0;
+  const x0 = p.urban ? 62 : 0;
+  const rain = [20, 45, 70, 95, 120, 145].map(x => `<line x1="${x}" y1="4" x2="${x - 4}" y2="16"/>`).join('');
+  const cap = p.group ? `Rain soaks in ${['A','B'].includes(p.group) ? 'deep' : 'shallow'}${p.urban ? '; pavement sheds it' : ''}` : 'Pavement and fill';
+  return `<svg viewBox="0 0 160 100" role="img" aria-label="${cap}">
+    <g stroke="var(--water)" stroke-width="2" stroke-linecap="round">${rain}</g>
+    <rect x="0" y="30" width="160" height="70" fill="var(--loam)"/>
+    ${depth ? `<rect x="${x0}" y="30" width="${160 - x0}" height="${depth}" fill="var(--water)" opacity=".8"/>
+      <g stroke="var(--surface)" stroke-width="2" marker-end="url(#dn)">${[0.25, 0.5, 0.75].map(f => { const x = x0 + (160 - x0) * f; return `<line x1="${x}" y1="33" x2="${x}" y2="${30 + depth - 5}"/>`; }).join('')}</g>` : ''}
+    ${p.urban ? `<rect x="0" y="22" width="60" height="16" fill="#9A9E9C" stroke="var(--ink)" stroke-width="1.5"/>
+      <path d="M8,20 L52,20" stroke="var(--water)" stroke-width="2" marker-end="url(#ah)"/>` : ''}
+    ${puddle && p.group ? `<ellipse cx="${(x0 + 160) / 2}" cy="30" rx="${puddle}" ry="4" fill="var(--water)"/>` : ''}
+    <defs><marker id="ah" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--water)"/></marker>
+      <marker id="dn" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="4" markerHeight="4" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--surface)"/></marker></defs>
+  </svg><div class="cap">${cap}</div>`;
+}
+function zoneViz(z) {
+  if (!z || !z.zone) return '';
+  const zones = ['5a','5b','6a','6b','7a','7b','8a','8b','9a','9b'];
+  let i = zones.indexOf(z.zone.toLowerCase());
+  if (i < 0) i = parseInt(z.zone, 10) < 5 ? 0 : zones.length - 1;
+  const w = 16;
+  const mix = t => { const a = [92, 140, 205], b = [222, 120, 70]; return `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * t)).join(',')})`; };
+  const cells = zones.map((n, k) => `<rect x="${k * w}" y="38" width="${w}" height="22" fill="${mix(k / (zones.length - 1))}" opacity="${k === i ? 1 : 0.55}"/>`).join('');
+  return `<svg viewBox="0 0 160 100" role="img" aria-label="Zone ${z.zone} on a cold to warm scale">
+    ${cells}
+    <polygon points="${i * w + 2},28 ${i * w + 14},28 ${i * w + 8},36" fill="var(--ink)"/>
+    <rect x="${i * w}" y="38" width="${w}" height="22" fill="none" stroke="var(--ink)" stroke-width="2"/>
+    <text x="0" y="76" font-size="10" fill="var(--muted)" font-family="inherit">colder</text>
+    <text x="160" y="76" font-size="10" fill="var(--muted)" text-anchor="end" font-family="inherit">warmer</text>
+    <text x="${i * w + 8}" y="22" font-size="11" font-weight="700" fill="var(--ink)" text-anchor="middle" font-family="inherit">${z.zone}</text>
+  </svg>`;
+}
+
+function renderLayer(title, band, info, src) {
+  return `<div class="layer" style="--band:${info.hot ? 'var(--alert)' : band}"><div class="row">
+    <div class="txt"><h2>${title}</h2><div class="big">${info.big}</div><p>${info.text}</p><div class="src">${src}</div></div>
+    ${info.viz ? `<div class="viz">${info.viz}</div>` : ''}</div></div>`;
+}
+const withViz = (info, viz) => Object.assign(info, { viz });
+const failed = (what) => ({ big: 'Couldn\'t load', text: `The ${what} service didn't respond. Try again in a moment.` });
+
+$('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = $('addr').value.trim(); if (!q) return;
+  $('go').disabled = true; setStatus('Finding that address...');
+  try {
+    const loc = await geocode(q);
+    if (marker) marker.remove();
+    marker = L.marker([loc.lat, loc.lng]).addTo(map);
+    map.setView([loc.lat, loc.lng], 16);
+    setStatus('Reading the ground at ' + loc.label.split(',').slice(0, 3).join(','));
+    const [flood, soil, zone] = await Promise.allSettled([getFlood(loc.lat, loc.lng), getSoil(loc.lat, loc.lng), getZone(loc.zip)]);
+    $('core').innerHTML =
+      renderLayer('Flood risk', 'var(--water)', flood.status === 'fulfilled' ? withViz(explainFlood(flood.value), floodViz(floodLevel(flood.value))) : failed('FEMA flood map'), 'FEMA National Flood Hazard Layer') +
+      renderLayer('How your soil handles rain', 'var(--loam)', soil.status === 'fulfilled' ? withViz(explainSoil(soil.value), soilViz(soilParams(soil.value))) : failed('USDA soil'), 'USDA NRCS Soil Survey') +
+      renderLayer('Growing zone', 'var(--leaf)', zone.status === 'fulfilled' ? withViz(explainZone(zone.value), zoneViz(zone.value)) : failed('hardiness zone'), 'USDA Plant Hardiness Zone Map');
+    setStatus(loc.label.split(',').slice(0, 3).join(','));
+  } catch (err) {
+    console.error(err);
+    if (err instanceof NoMatch) setStatus('No match for that address. Try adding the city and state.', true);
+    else setStatus('Couldn\'t reach any address lookup service. Check your internet connection, or try opening this file in Chrome or Firefox.', true);
+  } finally { $('go').disabled = false; }
+});
+</script>
+</body>
+</html>
